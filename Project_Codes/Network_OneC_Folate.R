@@ -1,7 +1,7 @@
 library(pacman)
-p_load("openxlsx","tidyverse", "Hmisc", "corrplot","igraph","RCy3","BioNet","fuzzyjoin", 
+p_load("plyr", "dplyr", "openxlsx","tidyverse", "Hmisc", "corrplot","igraph","RCy3","BioNet","fuzzyjoin", 
        "naniar", "plotly", "reshape", "KEGGgraph", "KEGG.db", "Rgraphviz", "RBGL", "KEGGprofile", "visNetwork", "ggnetwork",
-       "rlist", "leaflet", "matrixStats", "plyr")
+       "rlist", "leaflet", "matrixStats", "readxl", "RColorBrewer", "pheatmap")
 
 
 map2color<-function(x,pal,limits=NULL){
@@ -146,11 +146,12 @@ edges_enzymes <- edges_enzymes %>%
     dplyr::group_by(Protein_families, from, to) %>% 
     mutate(title = paste0(title, collapse = "<br>"))
 
-Metabolites_mapped <- read.csv("./Project_Datasets/MetaboAnalyst_mapping.csv") %>% left_join(Metabol_clusters, by = c("Query"= "Metabolite")) %>%
-    .[,c("KEGG","group")] %>% na.omit()
+Metabolites_mapped <- read.csv("./Project_Datasets/MetaboAnalyst_mapping.csv") %>%  na.omit() # left_join(Metabol_clusters, by = c("Query"= "Metabolite")) %>%
+    #.[,c("KEGG","group")] %>%
 nodes <- left_join(nodes, Metabolites_mapped, by = c("id" = "KEGG"))
-nodes$group[is.na(nodes$group)] <- 4
 nodes$color.background <- "#f8f8ff"
+edges_enzymes$label <- as.character(edges_enzymes$label)
+edges_enzymes <- edges_enzymes [!duplicated(edges_enzymes[1:3]),]
 visNetwork(nodes,edges_enzymes, height = 1000, width = "100%") %>% 
     visIgraphLayout(smooth = T)%>% 
     visNodes(
@@ -163,6 +164,51 @@ visNetwork(nodes,edges_enzymes, height = 1000, width = "100%") %>%
                selectedBy = "label") %>%
     visPhysics(stabilization = FALSE,solver = "forceAtlas2Based", 
                forceAtlas2Based = list(gravitationalConstant = -90))
-edges_enzymes$label <- as.character(edges_enzymes$label)
 
-save(nodes, edges_enzymes, folate_cell_line_data_test, Metabolites_mapped, Enzymes_Metabolites,Protein_heatmap, heatmap, file = "./Project_Output/Trial_network.RData")
+
+#heatmap
+#Metabolites vs. Tissues#
+CellLineInputFile="./Project_Datasets/41591_2019_404_MOESM2_ESM.xlsx"
+CellLineAnnoFile="./Project_Datasets/mod_tissue_origins.txt"
+FolateMetaFile="./Project_Datasets/kegg_metabolites.txt"
+
+cell_line_data=read_excel(CellLineInputFile,sheet=3)
+mod_cell_line_data=data.frame(column_to_rownames(cell_line_data, var = "...1"),check.names=F)
+
+cell_line_annotation=read.delim(file=CellLineAnnoFile,header=F)
+tissue_annotation=str_replace(cell_line_annotation[,1],"HAEMATOPOIETIC_AND_LYMPHOID_TISSUE","BLOOD")
+pat_others=c("AUTONOMIC_GANGLIA|BILIARY_TRACT|BONE|KIDNEY|PLEURA|PROSTATE|SALIVARY_GLAND|SOFT_TISSUE|THYROID")
+tissue_annotation=str_replace_all(tissue_annotation,pat_others,"OTHERS")
+
+mod_tissue_annotation=data.frame(tissue_annotation)
+row.names(mod_tissue_annotation) <- rownames(mod_cell_line_data)
+
+#Colour palette for the tissue annotation#
+n <- 15
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+
+#ann_colors=sample(col_vector, n)
+n <- 15
+ann_colors=col_vector[50:(50+n-1)]
+names(ann_colors) <- unique(mod_tissue_annotation$tissue_annotation)
+ann_colors=list(tissue_annotation=ann_colors)
+
+#folate_metabolites=c("glycine", "serine", "adenosine", "glutamate", "NAD", "NADP", "methionine", "betaine", "cystathionine", "choline", "dimethylglycine", "homocysteine", "5-adenosylhomocysteine", "putrescine", "sarcosine", "alpha-ketoglutarate" )
+folate_metabolites=read.delim(file=FolateMetaFile,header=F, stringsAsFactors = F)
+folate_cell_line_data=subset(mod_cell_line_data,select= colnames(mod_cell_line_data) %in% folate_metabolites[,1])
+folate_cell_line_data_test <- folate_cell_line_data %>% mutate(Cell_line = rownames(folate_cell_line_data)) %>%
+    pivot_longer(-Cell_line, names_to= "Metabolite", values_to = "Abundance") %>% mutate(Organ = str_match(.$Cell_line, "_([:graph:]*$)")[,2])
+
+
+#pheatmap(t(folate_cell_line_data),color = colorRampPalette(rev(brewer.pal(n = 11, name ="RdYlBu")))(50),scale="row",clustering_distance_rows="correlation",clustering_distance_cols = "correlation",show_rownames =T,show_colnames =F,annotation_col=mod_tissue_annotation,annotation_colors=ann_colors,main="Metabolites and Tissues in the Folate Pathway")
+
+heatmap <- pheatmap(folate_cell_line_data,color = colorRampPalette(rev(brewer.pal(n = 11, name ="RdYlBu")))(50),scale="column",clustering_distance_rows="correlation",clustering_distance_cols = "correlation",show_rownames =F,show_colnames =T,annotation_row=mod_tissue_annotation,annotation_colors=ann_colors,main="Metabolites and Tissues in the Folate Pathway")
+
+save(nodes, #done
+     edges_enzymes, #done
+     folate_cell_line_data_test, #done
+     Metabolites_mapped,#done
+     Enzymes_Metabolites, #done
+     heatmap, #done
+     file = "./Project_Output/Trial_network.RData")
